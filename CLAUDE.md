@@ -4,32 +4,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Balans** is a single-page Dutch household finance app for two partners to manage shared expenses. It parses Rabobank PDF bank statements, matches transactions to fixed expenses, and tracks split contributions.
+**Balans** is a Dutch household finance app for two partners to manage shared expenses. It parses Rabobank PDF bank statements, matches transactions to fixed expenses, and tracks split contributions.
 
 ## Running the App
 
-No build step — the app is a single self-contained `index.html` file.
-
 ```bash
-# Local development: open directly in browser
-open index.html
+# Install dependencies
+npm install
 
-# Docker (serves on http://localhost:8080)
+# Run locally (requires MariaDB — see docker-compose.yml for env vars)
+node server.js
+
+# Docker (easiest — starts MariaDB + app on http://localhost:4747)
 docker-compose up
 
-# Syntax-check a JS block (no test suite exists)
-node -e "const fs=require('fs'); new Function(fs.readFileSync('index.html','utf8')); console.log('OK')"
+# Syntax-check the embedded JS blocks
+node -e "
+const fs=require('fs'), html=fs.readFileSync('index.html','utf8');
+html.match(/<script[^>]*>([\s\S]*?)<\/script>/g).forEach((s,i)=>{
+  try{new Function(s.replace(/<\/?script[^>]*>/g,''))}
+  catch(e){console.error('Block',i,e.message)}
+});
+console.log('OK');
+"
 ```
+
+Default credentials (override with env vars): `BALANS_USER=admin` / `BALANS_PASSWORD=balans`.
 
 ## Architecture
 
-**Everything lives in `index.html`** (~2,800 lines of HTML + embedded CSS + vanilla JS). There are no separate source files, no npm packages, no build tools.
+**Two-file split**: `server.js` (Node/Express backend) + `index.html` (all frontend: HTML + CSS + vanilla JS, ~2,800 lines).
 
-Key architectural decisions:
-- **State** is a single object `S` persisted to `localStorage` under the key `"balans"` — all reads/writes go through `load()`/`persist()`.
+### server.js
+
+Express server with MariaDB (mysql2). Bootstraps on startup — creates tables and default user if absent.
+
+**API routes** (all require session except login):
+- `POST /api/login` — bcrypt password check, sets `req.session.userId`
+- `POST /api/logout` — destroys session
+- `GET  /api/me` — session check (used by frontend at startup)
+- `GET  /api/state` — returns user's app state JSON from `app_state` table
+- `PUT  /api/state` — upserts app state JSON
+
+**Database tables**: `users` (id, username, password_hash), `app_state` (user_id PK → data LONGTEXT), `sessions` (managed by express-mysql-session).
+
+### State persistence
+
+`S` is the single global state object. `load()` fetches from `/api/state` at boot; if unreachable, falls back to `localStorage` (standalone mode). `persist()` debounces 300 ms then calls `persistNow()` which PUTs to `/api/state`; on network failure falls back to `localStorage`. Legacy `localStorage` data is migrated to the server on first successful load.
+
+### Client-side architecture (index.html)
+
 - **Rendering** is imperative: each page has a dedicated `render*()` function that sets `innerHTML`. No virtual DOM.
 - **Financial month** runs from the 24th of one month to the 23rd of the next (`MONTH_START_DAY = 24`). `financialMonthFromDate()` converts a calendar date to `{ y, m }`. `monthKey()` returns `"YYYY-MM"` for the active month.
 - **PDF parsing** uses PDF.js (CDN, v3.11.174). `pickStatementParser(doc)` selects from `statementParsers[]` by calling each parser's `canParse(doc)`. The CC parser must be registered **before** the Rabobank Standard parser to avoid false-positive detection.
+- **Service worker** (`sw.js`): caches the app shell (network-first); `/api/*` requests are always network-only.
 
 ### State shape (`S`)
 
@@ -84,7 +112,7 @@ S = {
 - **Maand** — salary inputs (p1: salaris + streefsalaris + creditcard; p2: salaris), expense list with filter pills (Alles/Verwerkt/Onverwerkt), income/expense summary, transfer amounts per partner + Autorekening.
 - **Uitgaven** — CRUD for fixed recurring expenses. Account filter pills shown when expenses span multiple accounts. Shows contributor lines with "verwerkt" badge.
 - **Transacties** — import PDF statements; shows **all** unmatched transactions (not filtered by active month). Account filter pills + type filter (Alles/Afschrijvingen/Bijschrijvingen). Credit transactions can be linked to one expense (Koppelen) or split across multiple expenses (Splitsen).
-- **Instellingen** — partner names, split ratio, accounts, categories, salarisrekeningen, andere rekeningen (trackedIbans), auto's.
+- **Instellingen** — partner names, split ratio, accounts, categories, salarisrekeningen, andere rekeningen (trackedIbans), auto's, back-up/herstel, en op mobiel: donkere modus + uitloggen.
 
 ### PDF parsers (`statementParsers[]`)
 
