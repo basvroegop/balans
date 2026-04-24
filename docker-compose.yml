@@ -17,8 +17,7 @@ services:
       start_period: 30s
 
   app:
-    build:
-      context: https://github.com/basvroegop/balans.git
+    image: ghcr.io/basvroegop/balans:latest
     restart: unless-stopped
     ports:
       - "4747:4747"
