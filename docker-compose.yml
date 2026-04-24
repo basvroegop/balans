@@ -1,0 +1,52 @@
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+      MARIADB_DATABASE: balans
+      MARIADB_USER: balans
+      MARIADB_PASSWORD: ${DB_PASSWORD:-balanspass}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4747:4747"
+    networks:
+      - default
+      - traefik
+    environment:
+      PORT: 4747
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: balans
+      DB_USER: balans
+      DB_PASSWORD: ${DB_PASSWORD:-balanspass}
+      SESSION_SECRET: ${SESSION_SECRET:-verander-dit-naar-een-willekeurige-string}
+      BALANS_USER: ${BALANS_USER:-admin}
+      BALANS_PASSWORD: ${BALANS_PASSWORD:-balans}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.balans.rule=Host(`balans.basflix`)"
+      - "traefik.http.routers.balans.entrypoints=websecure"
+      - "traefik.http.routers.balans.tls.certresolver=step"
+      - "traefik.http.services.balans.loadbalancer.server.port=4747"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+
+networks:
+  traefik:
+    external: true
